@@ -1,0 +1,91 @@
+---
+title: "Exercise 1"
+author: "Jon Guler"
+date: "2024-04-19"
+output: html_document
+---
+
+```{r}
+library("readr")
+library("ggplot2")
+library("sf")
+library("dplyr")
+library("terra")
+library("tmap")
+```
+
+#Task 1
+
+```{r Task 1}
+#import the data
+wildschweine <- read.csv("Data/wildschwein_BE.csv")
+```
+
+#Task 2
+
+```{r Task 2.1}
+#plot the data, colored according to the respective animal
+ggplot(wildschweine, aes(x = Long, y= Lat, colour = TierID)) + geom_point() + theme(legend.position = 'none')
+```
+```{r Task 2.2}
+#make the dataframe a spatial object
+wildschweine <- st_as_sf(wildschweine,
+    coords = c("Long", "Lat"),
+    crs = 4326
+)
+```
+
+#Task 3
+
+```{r Task 3.1}
+#transform the data from WGS84 into LV95
+wildschweine_2056 <- wildschweine |> st_transform(2056)
+```
+
+```{r Task 3.2}
+#group the dataframe into a mulitpoint feature per animal
+wildschwein_grouped <- group_by(wildschweine_2056, TierID)
+wildschwein_smry <- summarise(wildschwein_grouped)
+
+#calculate the convexe hull
+convex_hull <- st_convex_hull(wildschwein_smry)
+```
+
+#Task 4
+
+```{r Task 4.1}
+#plot the convex hull
+plot(convex_hull)
+
+ggplot(data = convex_hull) +
+  geom_sf(aes(fill = TierID), alpha = 0.5) +
+  scale_fill_viridis_d() +
+  coord_sf(datum = 2056) +
+  labs(fill = "Animal")
+```
+
+```{r Task 4.2}
+pk100 <- terra::rast("Data/pk100_BE.tif")
+plotRGB(pk100)
+```
+
+#Task 5
+```{r Task 5}
+tmap_mode("plot")
+
+tm_shape(pk100) +
+  tm_rgb() +
+tm_shape(convex_hull) +
+  tm_borders("red", lwd = 1) +
+  tm_polygons("TierID", alpha = 0.5) +
+  tm_legend(bg.color = "white")
+```
+
+#Task 6
+```{r Task 6}
+tmap_mode("view")
+
+tm_shape(convex_hull) +
+  tm_borders("red", lwd = 1) +
+  tm_polygons("TierID", alpha = 0.5)
+```

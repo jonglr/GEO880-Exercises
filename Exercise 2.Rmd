@@ -1,0 +1,302 @@
+---
+title: "Exercise 2"
+author: "Jon Guler"
+date: "2024-04-26"
+output: html_document
+---
+
+```{r}
+library("readr")
+library("ggplot2")
+library("sf")
+library("dplyr")
+library("terra")
+library("tmap")
+library(tidyr)
+```
+
+#Demo
+
+```{r Demo}
+now <- as.POSIXct("2024-04-26 10:22:00")
+later <- as.POSIXct("2024-04-26 11:35:00")
+time_difference <- as.numeric(difftime(later, now, units = "secs"))
+
+difftime_secs <- function(later, now){
+  as.numeric(difftime(later, now, units = "secs"))
+}
+
+numbers <- 1:10
+lead(numbers, 2)
+lag(numbers, 2, default = 9999)
+
+wildschwein <- tibble(
+    TierID = c(rep("Hans", 5), rep("Klara", 5)),
+    DatetimeUTC = rep(as.POSIXct("2015-01-01 00:00:00", tz = "UTC") + 0:4 * 15 * 60, 2)
+)
+
+now2 <- wildschwein$DatetimeUTC
+later2 <- lead(now2)
+wildschwein$timelag <- difftime_secs(later2, now2)
+
+wildschwein <- group_by(wildschwein, TierID)
+mutate(wildschwein,
+       timelag2 = difftime_secs(lead(DatetimeUTC), DatetimeUTC)
+       )
+
+wildschwein <- wildschwein %>%
+  group_by(TierID) %>%
+  mutate(
+    timelag2 = difftime_secs(lead(DatetimeUTC), DatetimeUTC)
+  )
+
+wildschwein <- wildschwein %>%
+  group_by(TierID) %>%
+  summarise(
+    first_sample = min(DatetimeUTC)
+  )
+
+```
+
+#Exercise A
+
+##Task 1
+
+```{r Task 1.1}
+wildschwein_BE <- read_delim("Data/wildschwein_BE_2056.csv", ",")
+wildschwein_BE <- st_as_sf(wildschwein_BE, coords = c("E", "N"), crs = 2056)
+```
+
+##Task 2
+
+```{r Task 1.2}
+difftime_secs <- function(later, now){
+    as.numeric(difftime(later, now, units = "secs"))
+}
+
+wildschwein_BE <- wildschwein_BE %>% 
+  arrange(DatetimeUTC) %>%  # Ensure data is sorted by time
+  mutate(time_lag = lead(DatetimeUTC) %>% difftime_secs(now = DatetimeUTC))
+
+#Question 1
+num_individuals <- length(unique(wildschwein_BE$TierID))
+
+#Question 2
+individual_tracking_summary <- wildschwein_BE %>%
+  group_by(TierID) %>%
+  summarise(
+    start_date = min(DatetimeUTC),
+    end_date = max(DatetimeUTC),
+    duration = difftime(end_date, start_date, units = "days"),
+    recorded_points = n(),
+    avg_time_lag = mean(time_lag, na.rm = TRUE)
+  )
+```
+Question 1:
+Three individuals were tracked
+
+Question 2:
+- 002A: 338 days
+- 016A: 234 days
+- 018A: 261 days
+Yes, there are time gaps of sometimes several hours
+
+Question 3:
+It began with a separate tracking but in the end, ll the individuals were tracked concurrently
+
+Question 4:
+The average time lag between two samples is the following:
+- 002A: 603
+- 016A: 434
+- 018A: 657
+Approximately all 15 minutes
+
+##Task 3
+
+```{r Task 1.3}
+# Custom function to calculate distance between elements
+distance_by_element <- function(later, now) {
+  as.numeric(st_distance(later, now, by_element = TRUE))
+}
+
+# Calculate the lagged geometry to compare current and previous points
+wildschwein_BE$geometry_lag <- lag(wildschwein_BE$geometry)
+
+# Apply the distance function to create a new column 'step_length'
+wildschwein_BE <- wildschwein_BE %>%
+  mutate(steplength = distance_by_element(geometry_lag, geometry))
+```
+
+##Task 4
+
+```{r Task 1.4}
+# Define the function to calculate distance by elements
+distance_by_element <- function(later, now) {
+  as.numeric(st_distance(later, now, by_element = TRUE))
+}
+
+# Calculate step length by applying the distance function
+wildschwein_BE <- wildschwein_BE %>%
+  mutate(steplength = distance_by_element(geometry_lag, geometry))
+
+# Calculate speed in meters per second (m/s)
+wildschwein_BE <- wildschwein_BE %>%
+  mutate(speed = steplength / time_lag)  # Assuming time_lag is in seconds and steplength in meters
+
+# Clean up by removing the temporary geometry_lag column
+wildschwein_BE$geometry_lag <- NULL
+```
+
+##Task 5
+
+```{r Task 1.5}
+wildschwein_sample <- wildschwein_BE %>%
+  filter(TierName == "Sabi") %>% 
+  head(100)
+
+tmap_mode("view")
+
+tm_shape(wildschwein_sample) + 
+  tm_dots()
+
+wildschwein_sample_line <- wildschwein_sample |> 
+  # dissolve to a MULTIPOINT:
+  summarise(do_union = FALSE) |> 
+  st_cast("LINESTRING")
+
+tmap_options(basemaps = "OpenStreetMap")
+
+tm_shape(wildschwein_sample_line) +
+  tm_lines() +
+  tm_shape(wildschwein_sample) + 
+  tm_dots()
+```
+
+#Exercise B
+
+##Task 1
+
+```{r Task 2.1}
+caro <- read_delim("Data/caro60.csv", ",") |>
+  st_as_sf(coords = c("E","N"), crs = 2056) |> 
+  select(DatetimeUTC)
+
+# Ensure data is sorted by DatetimeUTC if not already
+caro <- caro %>% 
+  arrange(DatetimeUTC)
+
+# Calculate previous and next geometries
+caro$geometry_prev <- lag(caro$geometry)
+caro$geometry_next <- lead(caro$geometry)
+
+# Calculate step length using midpoint (previous to next)
+caro <- caro %>%
+  mutate(steplength = distance_by_element(geometry_prev, geometry_next),
+         timelag = 120,  # Since the sampling interval is fixed at 120 seconds
+         speed = steplength / timelag)  # Speed in meters per second
+
+# Remove the temporary geometry columns
+caro <- select(caro, -c(geometry_prev, geometry_next))
+
+# Check the first few rows to verify
+print(head(caro))
+```
+
+##Task 2
+
+```{r Task 2.2}
+# Calculate the geometry with an offset of 2 using lead/lag functions
+caro <- caro %>%
+  mutate(geometry_plus_2 = lead(geometry, n = 2),  # Getting the geometry two steps ahead
+         geometry_minus_2 = lag(geometry, n = 2))  # Getting the geometry two steps behind
+
+# Apply the distance_by_element to calculate the step length with an offset of 2
+caro <- caro %>%
+  mutate(steplength2 = distance_by_element(geometry_minus_2, geometry_plus_2),
+         timelag2 = 240,  # Time difference for 2 steps at 120 seconds each
+         speed2 = steplength2 / timelag2)  # Calculate speed in meters per second
+
+# Remove temporary geometry columns
+caro <- select(caro, -c(geometry_plus_2, geometry_minus_2))
+
+# Drop geometry and select only specific columns to display relevant data only
+result <- caro %>%
+  st_drop_geometry() %>%
+  select(time2 = DatetimeUTC, timelag2, steplength2, speed2) %>%
+  head()
+
+# Display the first few rows to verify the calculations
+print(result)
+```
+
+##Task 3
+
+```{r Task 2.3}
+# Calculate the geometry with an offset of 4 using lead/lag functions
+caro <- caro %>%
+  mutate(geometry_plus_4 = lead(geometry, n = 4),  # Getting the geometry four steps ahead
+         geometry_minus_4 = lag(geometry, n = 4))  # Getting the geometry four steps behind
+
+# Apply the distance_by_element to calculate the step length with an offset of 4
+caro <- caro %>%
+  mutate(steplength3 = distance_by_element(geometry_minus_4, geometry_plus_4),
+         timelag3 = 480,  # Time difference for 4 steps at 120 seconds each
+         speed3 = steplength3 / timelag3)  # Calculate speed in meters per second
+
+# Remove temporary geometry columns
+caro <- select(caro, -c(geometry_plus_4, geometry_minus_4))
+
+# Drop geometry and select only specific columns to display relevant data only
+result <- caro %>%
+  st_drop_geometry() %>%
+  select(time3 = DatetimeUTC, timelag3, steplength3, speed3) %>%
+  head()
+
+# Display the first few rows to verify the calculations
+print(result)
+```
+
+##Task 4
+
+```{r Task 2.4}
+# before pivoting, let's simplify our data.frame
+caro2 <- caro |> 
+  st_drop_geometry() |> 
+  select(DatetimeUTC, speed, speed2, speed3)
+
+caro_long <- caro2 |> 
+  pivot_longer(c(speed, speed2, speed3))
+  
+head(caro_long)
+
+ggplot(caro_long, aes(name, value)) +
+  # we remove outliers to increase legibility, analogue
+  # Laube and Purves (2011)
+  geom_boxplot(outliers = FALSE)
+```
+
+#Exercise C
+
+##Task 1
+
+```{r Task 3.1}
+# Import GPX data
+gpx_path <- "Data/Jogging 3.gpx"
+gpx_data <- st_read(gpx_path, layer = "tracks")  # Change 'tracks' if a different layer is needed
+
+# Transform the CRS to CH1903+ LV95 (EPSG:2056)
+gpx_data_lv95 <- st_transform(gpx_data, crs = 2056)
+
+# Plotting the data using ggplot2
+ggplot(data = gpx_data_lv95) +
+  geom_sf() +  # If points, use geom_sf(); if lines, ensure geom_sf() works as is
+  theme_minimal() +
+  labs(title = "Map of GPX Data",
+       caption = "Data transformed to CH1903+ LV95")
+
+# Create a map using tmap
+tmap_mode("view")  # Use "plot" for static maps, "view" for interactive maps
+tm_shape(gpx_data_lv95) +
+  tm_lines() +  # tm_points() for point data
+  tm_layout(title = "Map of GPX Data in CH1903+ LV95")
+```
