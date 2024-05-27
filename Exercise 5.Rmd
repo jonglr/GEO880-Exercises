@@ -1,0 +1,227 @@
+---
+title: "Exercise 5"
+author: "Jon Guler"
+date: "2024-24-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r package management, echo=FALSE}
+library("readr")
+library("dplyr")
+library("sf")
+library("ggplot2")
+library("lubridate")
+library("SimilarityMeasures")
+library("plotly")
+```
+
+# Tasks & Input
+```{r task Input}
+testfun <- function() {}
+
+testfun()
+
+class(testfun())
+
+#this function does nothing
+testfun <- function() {
+    print("this function does nothing")
+}
+
+testfun()
+
+#function does slightly more
+testfun <- function(sometext) {
+    print(sometext)
+}
+
+testfun(sometext = "this function does slightly more, but still not much")
+
+#practical example
+my_age <- function(birthday, output_unit) {
+    difftime(Sys.time(), birthday, units = output_unit)
+}
+
+my_age(birthday = "1996-02-24", output_unit = "days")
+
+#default values
+my_age <- function(birthday, output_unit = "days") {
+    difftime(Sys.time(), birthday, units = output_unit)
+}
+
+# if not stated otherwise, our function uses the unit "days"
+my_age("1996-02-24")
+
+#overwrite and use hours instead
+# We can still overwrite units
+my_age("1996-02-24", "hours")
+```
+
+# Tasks 1: Write your own functions
+##Function 1: BMI
+```{r task 1.1}
+#Function 1: BMI
+calculate_bmi <- function(weight, height) {
+  if (weight <= 0 || height <= 0) {
+    stop("Weight and height must be positive numbers.")
+  }
+  bmi <- weight / (height^2)
+  return(bmi)
+}
+
+#Example
+weight <- 79  
+height <- 1.91
+bmi <- calculate_bmi(weight, height)
+print(bmi)
+```
+
+##Function 2: Celsius to Farenheight
+```{r task 1.2}
+#Function 2: Celsius to Farenheight
+celsius_to_fahrenheit <- function(celsius) {
+  fahrenheit <- celsius * 9/5 + 32
+  return(fahrenheit)
+}
+
+#Example
+celsius <- 28  
+fahrenheit <- celsius_to_fahrenheit(celsius)
+print(fahrenheit)  
+```
+
+##Function 3: Euclidean distance
+```{r task 1.3}
+#Function 3: euclidean distance
+euclidean_distance <- function(x1, y1, x2, y2) {
+  distance <- sqrt((x2 - x1)^2 + (y2 - y1)^2)
+  return(distance)
+}
+
+# Example 
+x1 <- 2
+y1 <- 3
+x2 <- 7
+y2 <- 11
+distance <- euclidean_distance(x1, y1, x2, y2)
+print(distance)  
+```
+
+#Task 2: Prepare Analysis
+```{r task 2}
+#Load dataset
+data <- read.csv('Data/wildschwein_BE_2056.csv')
+
+#Convert the DatetimeUTC column to Date type
+data$DatetimeUTC <- as.POSIXct(data$DatetimeUTC, format="%Y-%m-%dT%H:%M:%SZ", tz="UTC")
+
+# Filter the data for the individuals Rosa and Sabi within the specified date range
+filtered_data_sabirosi <- data %>%
+  filter(TierName %in% c("Rosa", "Sabi") &
+         DatetimeUTC >= as.POSIXct("2015-04-01", tz="UTC") &
+         DatetimeUTC <= as.POSIXct("2015-04-15", tz="UTC"))
+
+#Display the filtered data for sabi and rosa
+print(head(filtered_data_sabirosi))
+```
+
+#Task 3: Create Join Key
+```{r task 3}
+#Temporally match the animals
+#First adjust the time stamps to a common concurrent interval
+filtered_data_sabirosi <- filtered_data_sabirosi %>%
+  mutate(RoundedTime = round_date(DatetimeUTC, "15 minutes"))
+```
+
+
+#Task 4: Create Join Key
+##Split into one data frame per animal
+```{r task 4.1}
+#Split into 1 df per animal
+rosa_data <- filtered_data_sabirosi %>% filter(TierName == "Rosa")
+sabi_data <- filtered_data_sabirosi %>% filter(TierName == "Sabi")
+```
+
+##Join by new Date (Rounded Time)
+```{r task 4.2}
+#Join by rounded time (date)
+joined_data <- full_join(rosa_data, sabi_data, by = "RoundedTime")
+```
+
+##Calculate Euclidean Distance
+```{r task 4.3}
+#Calculate Euclidean distances between concurrent observations and store the values in a new column
+euclidean_distance <- function(x1, y1, x2, y2) {
+  distance <- sqrt((x2 - x1)^2 + (y2 - y1)^2)
+  return(distance)
+}
+
+#Calculate Euclidean distance
+joined_data <- joined_data %>%
+  mutate(Distance = euclidean_distance(rosa_data$E, rosa_data$N, sabi_data$E, sabi_data$N))
+```
+
+##Use Threshold to detemine if animals are spatially close enough
+```{r task 4.4}
+joined_data <- joined_data %>%
+  mutate(Meet = Distance <= 150)
+```
+
+#Task5: Visualize data
+```{r task 5}
+#Prepare data 
+rosa_points <- joined_data %>%
+  select(RoundedTime, E.x, N.x, Meet) %>%
+  rename(E = E.x, N = N.x, Meets = Meet) %>%
+  mutate(Animal = 'rosa')
+
+sabi_points <- joined_data %>%
+  select(RoundedTime, E.y, N.y, Meet) %>%
+  rename(E = E.y, N = N.y, Meets = Meet) %>%
+  mutate(Animal = 'sabi')
+
+#Combine data for plotting
+plot_data <- bind_rows(rosa_points, sabi_points)
+
+#Plotting the data
+ggplot() +
+  geom_point(data = plot_data, aes(x = E, y = N, color = Animal, alpha = 0.5)) +
+  geom_point(data = plot_data %>% filter(Meets), aes(x = E, y = N), color = "black", shape = 21, stroke = 1.5, size = 2) +
+  scale_color_manual(values = c("rosa" = "red", "sabi" = "blue")) +
+  labs(title = "Movement Patterns of Rosa and Sabi",
+       subtitle = "With locations where they meet highlighted",
+       x = "Easting",
+       y = "Northing",
+       color = "Regular Locations",
+       alpha = "Location Density") +
+  guides(alpha = "none") +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+#Use plotly for an improved visualization 
+fig <- plot_ly() %>%
+  add_trace(data = plot_data %>% filter(Animal == 'rosa'),
+            x = ~E, y = ~N, type = 'scatter', mode = 'markers',
+            marker = list(color = 'red', opacity = 0.5),
+            name = 'Rosa') %>%
+  add_trace(data = plot_data %>% filter(Animal == 'sabi'),
+            x = ~E, y = ~N, type = 'scatter', mode = 'markers',
+            marker = list(color = 'blue', opacity = 0.5),
+            name = 'Sabi') %>%
+  add_trace(data = plot_data %>% filter(Meets),
+            x = ~E, y = ~N, type = 'scatter', mode = 'markers',
+            marker = list(color = 'black', size = 10, symbol = 'circle-open'),
+            name = 'Meets') %>%
+  layout(title = 'Movement Patterns of Rosa and Sabi',
+         xaxis = list(title = 'Easting'),
+         yaxis = list(title = 'Northing'),
+         legend = list(title = list(text = 'Legend')))
+
+# Show the plot
+fig
+```
